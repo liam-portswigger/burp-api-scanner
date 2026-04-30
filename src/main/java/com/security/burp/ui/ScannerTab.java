@@ -1,26 +1,24 @@
 package com.security.burp.ui;
 
-import burp.*;
-import com.security.burp.scanner.ApiScanner;
+import com.security.burp.scanner.EndpointRegistry;
 import com.security.burp.utils.ApiEndpoint;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.util.Map;
 
-public class ScannerTab implements ITab {
+public class ScannerTab {
 
-    private final IBurpExtenderCallbacks callbacks;
-    private final ApiScanner apiScanner;
+    private final EndpointRegistry registry;
     private JPanel mainPanel;
     private JTable endpointTable;
     private DefaultTableModel tableModel;
     private JTextArea statsArea;
     private Timer refreshTimer;
 
-    public ScannerTab(IBurpExtenderCallbacks callbacks, ApiScanner apiScanner) {
-        this.callbacks = callbacks;
-        this.apiScanner = apiScanner;
+    public ScannerTab(EndpointRegistry registry) {
+        this.registry = registry;
         initializeUI();
         startAutoRefresh();
     }
@@ -29,15 +27,12 @@ public class ScannerTab implements ITab {
         mainPanel = new JPanel(new BorderLayout(10, 10));
         mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // Header panel with title and stats
         JPanel headerPanel = createHeaderPanel();
         mainPanel.add(headerPanel, BorderLayout.NORTH);
 
-        // Center panel with endpoint table
         JPanel centerPanel = createCenterPanel();
         mainPanel.add(centerPanel, BorderLayout.CENTER);
 
-        // Bottom panel with controls
         JPanel bottomPanel = createBottomPanel();
         mainPanel.add(bottomPanel, BorderLayout.SOUTH);
     }
@@ -45,25 +40,23 @@ public class ScannerTab implements ITab {
     private JPanel createHeaderPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        // Title
         JLabel titleLabel = new JLabel("Advanced API Security Scanner");
         titleLabel.setFont(new Font("Arial", Font.BOLD, 18));
         panel.add(titleLabel, BorderLayout.NORTH);
 
-        // Stats area
         statsArea = new JTextArea(8, 50);
         statsArea.setEditable(false);
         statsArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
         statsArea.setBackground(new Color(245, 245, 245));
         statsArea.setText("Waiting for API traffic...\n\n" +
                          "Features:\n" +
-                         "  • HTTP Method Fuzzing (tests all methods on each endpoint)\n" +
-                         "  • OWASP API Security Top 10 checks\n" +
-                         "  • Broken Object Level Authorization (BOLA)\n" +
-                         "  • Mass Assignment detection\n" +
-                         "  • Injection vulnerabilities (SQL, NoSQL, Command, XSS)\n" +
-                         "  • SSRF detection\n" +
-                         "  • Security misconfiguration checks\n");
+                         "  - HTTP Method Fuzzing (tests all methods on each endpoint)\n" +
+                         "  - OWASP API Security Top 10 checks\n" +
+                         "  - Broken Object Level Authorization (BOLA)\n" +
+                         "  - Mass Assignment detection\n" +
+                         "  - Injection vulnerabilities (SQL, NoSQL, Command, XSS)\n" +
+                         "  - SSRF detection\n" +
+                         "  - Security misconfiguration checks\n");
         JScrollPane statsScroll = new JScrollPane(statsArea);
         panel.add(statsScroll, BorderLayout.CENTER);
 
@@ -77,7 +70,6 @@ public class ScannerTab implements ITab {
         tableLabel.setFont(new Font("Arial", Font.BOLD, 14));
         panel.add(tableLabel, BorderLayout.NORTH);
 
-        // Create table
         String[] columnNames = {"Host", "Path", "Methods", "Requests"};
         tableModel = new DefaultTableModel(columnNames, 0) {
             @Override
@@ -90,7 +82,6 @@ public class ScannerTab implements ITab {
         endpointTable.setAutoCreateRowSorter(true);
         endpointTable.getTableHeader().setReorderingAllowed(false);
 
-        // Set column widths
         endpointTable.getColumnModel().getColumn(0).setPreferredWidth(150);
         endpointTable.getColumnModel().getColumn(1).setPreferredWidth(300);
         endpointTable.getColumnModel().getColumn(2).setPreferredWidth(200);
@@ -105,12 +96,10 @@ public class ScannerTab implements ITab {
     private JPanel createBottomPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
 
-        // Refresh button
         JButton refreshButton = new JButton("Refresh Endpoints");
         refreshButton.addActionListener(e -> refreshEndpointTable());
         panel.add(refreshButton);
 
-        // Clear button
         JButton clearButton = new JButton("Clear Table");
         clearButton.addActionListener(e -> {
             tableModel.setRowCount(0);
@@ -118,7 +107,6 @@ public class ScannerTab implements ITab {
         });
         panel.add(clearButton);
 
-        // Auto-refresh checkbox
         JCheckBox autoRefreshCheck = new JCheckBox("Auto-refresh (5s)", true);
         autoRefreshCheck.addActionListener(e -> {
             if (autoRefreshCheck.isSelected()) {
@@ -129,7 +117,6 @@ public class ScannerTab implements ITab {
         });
         panel.add(autoRefreshCheck);
 
-        // Status label
         JLabel statusLabel = new JLabel("Active scan checks will appear in Burp's Issues tab");
         statusLabel.setForeground(Color.BLUE);
         panel.add(Box.createHorizontalStrut(20));
@@ -139,7 +126,7 @@ public class ScannerTab implements ITab {
     }
 
     private void refreshEndpointTable() {
-        Map<String, ApiEndpoint> endpoints = apiScanner.getDiscoveredEndpoints();
+        Map<String, ApiEndpoint> endpoints = registry.snapshot();
 
         tableModel.setRowCount(0);
 
@@ -157,26 +144,26 @@ public class ScannerTab implements ITab {
     }
 
     private void updateStats() {
-        Map<String, ApiEndpoint> endpoints = apiScanner.getDiscoveredEndpoints();
+        Map<String, ApiEndpoint> endpoints = registry.snapshot();
         int totalEndpoints = endpoints.size();
         int totalRequests = endpoints.values().stream()
                                     .mapToInt(ApiEndpoint::getRequestCount)
                                     .sum();
 
         statsArea.setText(String.format(
-            "API Scanning Statistics\n" +
-            "══════════════════════\n" +
-            "Discovered Endpoints: %d\n" +
-            "Total API Requests:   %d\n\n" +
-            "Active Checks:\n" +
-            "  ✓ HTTP Method Fuzzing\n" +
-            "  ✓ BOLA (Broken Object Level Authorization)\n" +
-            "  ✓ Broken Authentication (JWT, tokens)\n" +
-            "  ✓ Mass Assignment\n" +
-            "  ✓ Excessive Data Exposure\n" +
-            "  ✓ Injection Attacks (SQL, NoSQL, Command, XSS)\n" +
-            "  ✓ SSRF Detection\n" +
-            "  ✓ Security Misconfiguration\n\n" +
+            "API Scanning Statistics%n" +
+            "======================%n" +
+            "Discovered Endpoints: %d%n" +
+            "Total API Requests:   %d%n%n" +
+            "Active Checks:%n" +
+            "  HTTP Method Fuzzing%n" +
+            "  BOLA (Broken Object Level Authorization)%n" +
+            "  Broken Authentication (JWT, tokens)%n" +
+            "  Mass Assignment%n" +
+            "  Excessive Data Exposure%n" +
+            "  Injection Attacks (SQL, NoSQL, Command, XSS)%n" +
+            "  SSRF Detection%n" +
+            "  Security Misconfiguration%n%n" +
             "Check the Issues tab for discovered vulnerabilities.",
             totalEndpoints, totalRequests
         ));
@@ -196,12 +183,6 @@ public class ScannerTab implements ITab {
         }
     }
 
-    @Override
-    public String getTabCaption() {
-        return "API Scanner";
-    }
-
-    @Override
     public Component getUiComponent() {
         return mainPanel;
     }

@@ -1,128 +1,98 @@
 package com.security.burp.checks;
 
-import burp.*;
-import com.security.burp.model.CustomScanIssue;
-import java.io.PrintWriter;
-import java.util.*;
+import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.http.message.HttpHeader;
+import burp.api.montoya.http.message.HttpRequestResponse;
+import burp.api.montoya.http.message.requests.HttpRequest;
+import burp.api.montoya.http.message.responses.HttpResponse;
+import burp.api.montoya.scanner.AuditResult;
+import burp.api.montoya.scanner.audit.issues.AuditIssue;
+import burp.api.montoya.scanner.scancheck.PassiveScanCheck;
+import com.security.burp.scanner.EndpointRegistry;
+import com.security.burp.util.MontoyaUtils;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Business Flow Check
  * OWASP API6:2023 - Unrestricted Access to Sensitive Business Flows
- * Detects potential business flow abuse issues
  */
-public class BusinessFlowCheck {
+public class BusinessFlowCheck implements PassiveScanCheck {
 
-    private final IBurpExtenderCallbacks callbacks;
-    private final IExtensionHelpers helpers;
-    private final PrintWriter stdout;
+    private final MontoyaApi api;
+    private final EndpointRegistry registry;
 
-    // Track request frequency per endpoint
-    private final Map<String, List<Long>> requestTimestamps;
-
-    public BusinessFlowCheck(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers,
-                            PrintWriter stdout) {
-        this.callbacks = callbacks;
-        this.helpers = helpers;
-        this.stdout = stdout;
-        this.requestTimestamps = new HashMap<>();
+    public BusinessFlowCheck(MontoyaApi api, EndpointRegistry registry) {
+        this.api = api;
+        this.registry = registry;
     }
 
-    public List<IScanIssue> checkPassive(IHttpRequestResponse baseRequestResponse) {
-        List<IScanIssue> issues = new ArrayList<>();
+    @Override
+    public String checkName() {
+        return "API6:2023 Unrestricted Access to Sensitive Business Flows";
+    }
 
+    @Override
+    public AuditResult doCheck(HttpRequestResponse rr) {
+        List<AuditIssue> issues = new ArrayList<>();
         try {
-            if (baseRequestResponse.getResponse() == null) {
-                return issues;
+            HttpRequest request = rr.request();
+            try {
+                registry.record(request.httpService().host(), request.pathWithoutQuery(), request.method());
+            } catch (Exception ignored) {}
+
+            if (!rr.hasResponse()) return AuditResult.auditResult(issues);
+            HttpResponse response = rr.response();
+            String path = request.pathWithoutQuery();
+            if (isSensitiveBusinessEndpoint(path) && !hasAntiAutomationMechanisms(response)) {
+                api.logging().logToOutput("[Business Flow] Sensitive endpoint without anti-automation: " + path);
+                issues.add(createBusinessFlowIssue(rr, path));
             }
-
-            IRequestInfo requestInfo = helpers.analyzeRequest(baseRequestResponse);
-            String path = requestInfo.getUrl().getPath();
-
-            // Check if endpoint is sensitive to business flow abuse
-            if (isSensitiveBusinessEndpoint(path)) {
-                IResponseInfo responseInfo = helpers.analyzeResponse(baseRequestResponse.getResponse());
-
-                // Check for missing anti-automation mechanisms
-                if (!hasAntiAutomationMechanisms(responseInfo)) {
-                    stdout.println("[Business Flow] Sensitive endpoint without anti-automation: " + path);
-                    issues.add(createBusinessFlowIssue(baseRequestResponse, path));
-                }
-            }
-
         } catch (Exception e) {
-            stdout.println("[Business Flow] Error: " + e.getMessage());
+            api.logging().logToError("[Business Flow] " + e.getMessage());
         }
-
-        return issues;
+        return AuditResult.auditResult(issues);
     }
 
     private boolean isSensitiveBusinessEndpoint(String path) {
-        String lowerPath = path.toLowerCase();
-
-        // Endpoints commonly vulnerable to business flow abuse
-        return lowerPath.contains("/purchase") ||
-               lowerPath.contains("/order") ||
-               lowerPath.contains("/payment") ||
-               lowerPath.contains("/checkout") ||
-               lowerPath.contains("/book") ||
-               lowerPath.contains("/reserve") ||
-               lowerPath.contains("/ticket") ||
-               lowerPath.contains("/vote") ||
-               lowerPath.contains("/transfer") ||
-               lowerPath.contains("/withdraw") ||
-               lowerPath.contains("/comment") ||
-               lowerPath.contains("/review") ||
-               lowerPath.contains("/submit") ||
-               lowerPath.contains("/create");
+        if (path == null) return false;
+        String p = path.toLowerCase();
+        return p.contains("/purchase") || p.contains("/order") || p.contains("/payment") ||
+               p.contains("/checkout") || p.contains("/book") || p.contains("/reserve") ||
+               p.contains("/ticket") || p.contains("/vote") || p.contains("/transfer") ||
+               p.contains("/withdraw") || p.contains("/comment") || p.contains("/review") ||
+               p.contains("/submit") || p.contains("/create");
     }
 
-    private boolean hasAntiAutomationMechanisms(IResponseInfo responseInfo) {
-        List<String> headers = responseInfo.getHeaders();
-
-        for (String header : headers) {
-            String lowerHeader = header.toLowerCase();
-
-            // Check for common anti-automation mechanisms
-            if (lowerHeader.contains("x-captcha") ||
-                lowerHeader.contains("recaptcha") ||
-                lowerHeader.contains("hcaptcha") ||
-                lowerHeader.contains("x-csrf-token") ||
-                lowerHeader.contains("x-xsrf-token")) {
+    private boolean hasAntiAutomationMechanisms(HttpResponse response) {
+        for (HttpHeader h : response.headers()) {
+            String s = (h.name() + ": " + h.value()).toLowerCase();
+            if (s.contains("x-captcha") || s.contains("recaptcha") || s.contains("hcaptcha") ||
+                s.contains("x-csrf-token") || s.contains("x-xsrf-token")) {
                 return true;
             }
         }
-
         return false;
     }
 
-    private IScanIssue createBusinessFlowIssue(IHttpRequestResponse baseRequestResponse, String path) {
-        String issueName = "API6:2023 - Unrestricted Access to Sensitive Business Flows";
-        String issueDetail = "The API endpoint performs sensitive business operations but lacks visible " +
-                           "anti-automation protections.<br><br>" +
-                           "Endpoint: " + path + "<br><br>" +
-                           "Without proper protections, attackers can:<br>" +
-                           "- Automate purchases/bookings to scalp items<br>" +
-                           "- Mass submit spam comments/reviews<br>" +
-                           "- Manipulate voting or rating systems<br>" +
-                           "- Exhaust inventory through automated orders<br>" +
-                           "- Perform financial fraud through automation<br><br>" +
-                           "Recommendation: Implement CAPTCHA, rate limiting with progressive delays, " +
-                           "device fingerprinting, behavioral analysis, or transaction value thresholds.";
-
-        String issueBackground = "API6:2023 - Unrestricted Access to Sensitive Business Flows<br><br>" +
-                               "APIs vulnerable to this risk expose a business flow - such as buying a ticket, or posting " +
-                               "a comment - without compensating for how the functionality could harm the business if used " +
-                               "excessively in an automated manner. This doesn't necessarily come from implementation bugs.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            issueName,
-            issueDetail,
-            issueBackground,
-            "Medium",
-            "Tentative"
-        );
+    private AuditIssue createBusinessFlowIssue(HttpRequestResponse rr, String path) {
+        String detail = "The API endpoint performs sensitive business operations but lacks visible " +
+                "anti-automation protections.<br><br>" +
+                "Endpoint: " + path + "<br><br>" +
+                "Without proper protections, attackers can:<br>" +
+                "- Automate purchases/bookings to scalp items<br>" +
+                "- Mass submit spam comments/reviews<br>" +
+                "- Manipulate voting or rating systems<br>" +
+                "- Exhaust inventory through automated orders<br>" +
+                "- Perform financial fraud through automation<br><br>" +
+                "Recommendation: Implement CAPTCHA, rate limiting with progressive delays, " +
+                "device fingerprinting, behavioral analysis, or transaction value thresholds.";
+        String background = "API6:2023 - Unrestricted Access to Sensitive Business Flows<br><br>" +
+                "APIs vulnerable to this risk expose a business flow - such as buying a ticket, or posting " +
+                "a comment - without compensating for how the functionality could harm the business if used " +
+                "excessively in an automated manner. This doesn't necessarily come from implementation bugs.";
+        return MontoyaUtils.makeIssue(
+                "API6:2023 - Unrestricted Access to Sensitive Business Flows",
+                detail, background, "Medium", "Tentative", rr);
     }
 }

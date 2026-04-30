@@ -1,401 +1,241 @@
 package com.security.burp.checks;
 
-import burp.*;
-import com.security.burp.model.CustomScanIssue;
-import java.io.PrintWriter;
+import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.http.message.HttpHeader;
+import burp.api.montoya.http.message.HttpRequestResponse;
+import burp.api.montoya.http.message.requests.HttpRequest;
+import burp.api.montoya.http.message.responses.HttpResponse;
+import burp.api.montoya.scanner.AuditResult;
+import burp.api.montoya.scanner.audit.issues.AuditIssue;
+import burp.api.montoya.scanner.scancheck.PassiveScanCheck;
+import com.security.burp.scanner.EndpointRegistry;
+import com.security.burp.util.MontoyaUtils;
+
 import java.util.*;
 
 /**
  * Security Misconfiguration Check
  * OWASP API8:2023 - Security Misconfiguration
- * Detects security misconfigurations in API implementations
  */
-public class SecurityMisconfigCheck {
+public class SecurityMisconfigCheck implements PassiveScanCheck {
 
-    private final IBurpExtenderCallbacks callbacks;
-    private final IExtensionHelpers helpers;
-    private final PrintWriter stdout;
+    private static final Map<String, String> RECOMMENDED_HEADERS = new LinkedHashMap<>();
+    static {
+        RECOMMENDED_HEADERS.put("X-Content-Type-Options", "nosniff");
+        RECOMMENDED_HEADERS.put("X-Frame-Options", "DENY or SAMEORIGIN");
+        RECOMMENDED_HEADERS.put("Content-Security-Policy", "restrictive policy");
+        RECOMMENDED_HEADERS.put("Strict-Transport-Security", "max-age value");
+    }
 
-    // Security headers that should be present
-    private static final Map<String, String> RECOMMENDED_HEADERS = new HashMap<String, String>() {{
-        put("X-Content-Type-Options", "nosniff");
-        put("X-Frame-Options", "DENY or SAMEORIGIN");
-        put("Content-Security-Policy", "restrictive policy");
-        put("Strict-Transport-Security", "max-age value");
-    }};
-
-    // Headers that shouldn't be present (information disclosure)
     private static final String[] DISCLOSURE_HEADERS = {
         "Server", "X-Powered-By", "X-AspNet-Version",
         "X-AspNetMvc-Version", "X-Runtime"
     };
 
-    public SecurityMisconfigCheck(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers,
-                                 PrintWriter stdout) {
-        this.callbacks = callbacks;
-        this.helpers = helpers;
-        this.stdout = stdout;
+    private final MontoyaApi api;
+    private final EndpointRegistry registry;
+
+    public SecurityMisconfigCheck(MontoyaApi api, EndpointRegistry registry) {
+        this.api = api;
+        this.registry = registry;
     }
 
-    public List<IScanIssue> checkPassive(IHttpRequestResponse baseRequestResponse) {
-        List<IScanIssue> issues = new ArrayList<>();
+    @Override
+    public String checkName() {
+        return "API8:2023 Security Misconfiguration";
+    }
 
+    @Override
+    public AuditResult doCheck(HttpRequestResponse rr) {
+        List<AuditIssue> issues = new ArrayList<>();
         try {
-            if (baseRequestResponse.getResponse() == null) {
-                return issues;
-            }
+            HttpRequest request = rr.request();
+            try {
+                registry.record(request.httpService().host(), request.pathWithoutQuery(), request.method());
+            } catch (Exception ignored) {}
 
-            IRequestInfo requestInfo = helpers.analyzeRequest(baseRequestResponse);
-            IResponseInfo responseInfo = helpers.analyzeResponse(baseRequestResponse.getResponse());
+            if (!rr.hasResponse()) return AuditResult.auditResult(issues);
+            HttpResponse response = rr.response();
 
-            // Check for missing security headers
-            issues.addAll(checkMissingSecurityHeaders(baseRequestResponse, responseInfo));
-
-            // Check for information disclosure headers
-            issues.addAll(checkDisclosureHeaders(baseRequestResponse, responseInfo));
-
-            // Check for CORS misconfigurations
-            issues.addAll(checkCORSMisconfig(baseRequestResponse, requestInfo, responseInfo));
-
-            // Check for HTTP instead of HTTPS
-            issues.addAll(checkInsecureProtocol(baseRequestResponse, requestInfo));
-
-            // Check for verbose error messages
-            issues.addAll(checkVerboseErrors(baseRequestResponse, responseInfo));
-
+            issues.addAll(checkMissingSecurityHeaders(rr, response));
+            issues.addAll(checkDisclosureHeaders(rr, response));
+            issues.addAll(checkCORSMisconfig(rr, request, response));
+            issues.addAll(checkInsecureProtocol(rr, request));
+            issues.addAll(checkVerboseErrors(rr, response));
         } catch (Exception e) {
-            stdout.println("[Misconfig Check] Error: " + e.getMessage());
+            api.logging().logToError("[Misconfig Check] " + e.getMessage());
         }
-
-        return issues;
+        return AuditResult.auditResult(issues);
     }
 
-    private List<IScanIssue> checkMissingSecurityHeaders(IHttpRequestResponse baseRequestResponse,
-                                                         IResponseInfo responseInfo) {
-        List<IScanIssue> issues = new ArrayList<>();
-        List<String> headers = responseInfo.getHeaders();
+    private List<AuditIssue> checkMissingSecurityHeaders(HttpRequestResponse rr, HttpResponse response) {
+        List<AuditIssue> issues = new ArrayList<>();
         Map<String, String> headerMap = new HashMap<>();
-
-        // Build header map
-        for (String header : headers) {
-            int colonIndex = header.indexOf(':');
-            if (colonIndex > 0) {
-                String name = header.substring(0, colonIndex).trim();
-                String value = header.substring(colonIndex + 1).trim();
-                headerMap.put(name.toLowerCase(), value);
-            }
+        for (HttpHeader h : response.headers()) {
+            headerMap.put(h.name().toLowerCase(), h.value());
         }
-
-        List<String> missingHeaders = new ArrayList<>();
-        for (String recommendedHeader : RECOMMENDED_HEADERS.keySet()) {
-            if (!headerMap.containsKey(recommendedHeader.toLowerCase())) {
-                missingHeaders.add(recommendedHeader);
-            }
+        List<String> missing = new ArrayList<>();
+        for (String name : RECOMMENDED_HEADERS.keySet()) {
+            if (!headerMap.containsKey(name.toLowerCase())) missing.add(name);
         }
-
-        if (!missingHeaders.isEmpty()) {
-            stdout.println("[Misconfig Check] Missing security headers: " + missingHeaders);
-            issues.add(createMissingHeadersIssue(baseRequestResponse, missingHeaders));
+        if (!missing.isEmpty()) {
+            api.logging().logToOutput("[Misconfig Check] Missing security headers: " + missing);
+            issues.add(createMissingHeadersIssue(rr, missing));
         }
-
         return issues;
     }
 
-    private List<IScanIssue> checkDisclosureHeaders(IHttpRequestResponse baseRequestResponse,
-                                                    IResponseInfo responseInfo) {
-        List<IScanIssue> issues = new ArrayList<>();
-        List<String> headers = responseInfo.getHeaders();
-        List<String> foundDisclosureHeaders = new ArrayList<>();
-
-        for (String header : headers) {
-            String lowerHeader = header.toLowerCase();
-            for (String disclosureHeader : DISCLOSURE_HEADERS) {
-                if (lowerHeader.startsWith(disclosureHeader.toLowerCase() + ":")) {
-                    foundDisclosureHeaders.add(header);
+    private List<AuditIssue> checkDisclosureHeaders(HttpRequestResponse rr, HttpResponse response) {
+        List<AuditIssue> issues = new ArrayList<>();
+        List<String> found = new ArrayList<>();
+        for (HttpHeader h : response.headers()) {
+            for (String disc : DISCLOSURE_HEADERS) {
+                if (h.name().equalsIgnoreCase(disc)) {
+                    found.add(h.name() + ": " + h.value());
                     break;
                 }
             }
         }
-
-        if (!foundDisclosureHeaders.isEmpty()) {
-            stdout.println("[Misconfig Check] Information disclosure headers: " + foundDisclosureHeaders);
-            issues.add(createDisclosureHeadersIssue(baseRequestResponse, foundDisclosureHeaders));
+        if (!found.isEmpty()) {
+            api.logging().logToOutput("[Misconfig Check] Information disclosure headers: " + found);
+            issues.add(createDisclosureHeadersIssue(rr, found));
         }
-
         return issues;
     }
 
-    private List<IScanIssue> checkCORSMisconfig(IHttpRequestResponse baseRequestResponse,
-                                                IRequestInfo requestInfo,
-                                                IResponseInfo responseInfo) {
-        List<IScanIssue> issues = new ArrayList<>();
-        List<String> responseHeaders = responseInfo.getHeaders();
-
-        for (String header : responseHeaders) {
-            if (header.toLowerCase().startsWith("access-control-allow-origin:")) {
-                String value = header.substring(header.indexOf(':') + 1).trim();
-
-                // Check for wildcard with credentials
-                if (value.equals("*")) {
-                    boolean hasCredentials = false;
-                    for (String h : responseHeaders) {
-                        if (h.toLowerCase().contains("access-control-allow-credentials: true")) {
-                            hasCredentials = true;
-                            break;
-                        }
-                    }
-
-                    if (hasCredentials) {
-                        stdout.println("[Misconfig Check] ⚠️  CORS: wildcard origin with credentials!");
-                        issues.add(createCORSCredentialsIssue(baseRequestResponse));
-                    } else {
-                        stdout.println("[Misconfig Check] CORS: wildcard origin (potential issue)");
-                        issues.add(createCORSWildcardIssue(baseRequestResponse));
-                    }
-                }
-
-                // Check for reflected origin
-                String origin = getRequestHeader(requestInfo.getHeaders(), "Origin");
-                if (origin != null && value.equals(origin)) {
-                    stdout.println("[Misconfig Check] ⚠️  CORS: reflected origin!");
-                    issues.add(createCORSReflectedIssue(baseRequestResponse, origin));
-                }
-
-                break;
+    private List<AuditIssue> checkCORSMisconfig(HttpRequestResponse rr, HttpRequest request, HttpResponse response) {
+        List<AuditIssue> issues = new ArrayList<>();
+        String acao = MontoyaUtils.headerValue(response, "Access-Control-Allow-Origin");
+        if (acao == null) return issues;
+        acao = acao.trim();
+        if (acao.equals("*")) {
+            String acac = MontoyaUtils.headerValue(response, "Access-Control-Allow-Credentials");
+            boolean hasCreds = acac != null && acac.trim().equalsIgnoreCase("true");
+            if (hasCreds) {
+                api.logging().logToOutput("[Misconfig Check] CORS: wildcard origin with credentials!");
+                issues.add(createCORSCredentialsIssue(rr));
+            } else {
+                api.logging().logToOutput("[Misconfig Check] CORS: wildcard origin (potential issue)");
+                issues.add(createCORSWildcardIssue(rr));
             }
         }
-
+        String origin = MontoyaUtils.headerValue(request, "Origin");
+        if (origin != null && acao.equals(origin)) {
+            api.logging().logToOutput("[Misconfig Check] CORS: reflected origin!");
+            issues.add(createCORSReflectedIssue(rr, origin));
+        }
         return issues;
     }
 
-    private List<IScanIssue> checkInsecureProtocol(IHttpRequestResponse baseRequestResponse,
-                                                   IRequestInfo requestInfo) {
-        List<IScanIssue> issues = new ArrayList<>();
-
-        if (requestInfo.getUrl().getProtocol().equals("http")) {
-            stdout.println("[Misconfig Check] API using HTTP (insecure)");
-            issues.add(createInsecureProtocolIssue(baseRequestResponse));
-        }
-
-        return issues;
-    }
-
-    private List<IScanIssue> checkVerboseErrors(IHttpRequestResponse baseRequestResponse,
-                                                IResponseInfo responseInfo) {
-        List<IScanIssue> issues = new ArrayList<>();
-        int statusCode = responseInfo.getStatusCode();
-
-        // Only check error responses
-        if (statusCode < 400) {
-            return issues;
-        }
-
-        String responseBody = getResponseBody(baseRequestResponse.getResponse(), responseInfo).toLowerCase();
-
-        // Check for stack traces or detailed error info
-        if (responseBody.contains("stack trace") ||
-            responseBody.contains("at line") ||
-            responseBody.contains("exception") ||
-            responseBody.contains("error message") ||
-            responseBody.contains("stacktrace") ||
-            responseBody.contains("traceback")) {
-
-            stdout.println("[Misconfig Check] Verbose error messages detected");
-            issues.add(createVerboseErrorIssue(baseRequestResponse));
-        }
-
-        return issues;
-    }
-
-    private String getRequestHeader(List<String> headers, String headerName) {
-        String lowerName = headerName.toLowerCase() + ":";
-        for (String header : headers) {
-            if (header.toLowerCase().startsWith(lowerName)) {
-                return header.substring(header.indexOf(':') + 1).trim();
+    private List<AuditIssue> checkInsecureProtocol(HttpRequestResponse rr, HttpRequest request) {
+        List<AuditIssue> issues = new ArrayList<>();
+        try {
+            if (!request.httpService().secure()) {
+                api.logging().logToOutput("[Misconfig Check] API using HTTP (insecure)");
+                issues.add(createInsecureProtocolIssue(rr));
             }
+        } catch (Exception ignored) {}
+        return issues;
+    }
+
+    private List<AuditIssue> checkVerboseErrors(HttpRequestResponse rr, HttpResponse response) {
+        List<AuditIssue> issues = new ArrayList<>();
+        int statusCode = response.statusCode();
+        if (statusCode < 400) return issues;
+        String body = response.bodyToString().toLowerCase();
+        if (body.contains("stack trace") ||
+            body.contains("at line") ||
+            body.contains("exception") ||
+            body.contains("error message") ||
+            body.contains("stacktrace") ||
+            body.contains("traceback")) {
+            api.logging().logToOutput("[Misconfig Check] Verbose error messages detected");
+            issues.add(createVerboseErrorIssue(rr));
         }
-        return null;
+        return issues;
     }
 
-    private String getResponseBody(byte[] response, IResponseInfo responseInfo) {
-        int bodyOffset = responseInfo.getBodyOffset();
-        if (bodyOffset < response.length) {
-            return new String(Arrays.copyOfRange(response, bodyOffset, response.length));
+    private static final String API8_BACKGROUND =
+            "API8:2023 - Security Misconfiguration<br><br>" +
+            "APIs and the systems supporting them typically contain complex configurations, meant to " +
+            "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
+            "or don't follow security best practices when it comes to configuration, opening the door for " +
+            "different types of attacks.";
+
+    private AuditIssue createMissingHeadersIssue(HttpRequestResponse rr, List<String> missing) {
+        StringBuilder list = new StringBuilder();
+        for (String name : missing) {
+            list.append("- ").append(name).append(": ").append(RECOMMENDED_HEADERS.get(name)).append("<br>");
         }
-        return "";
+        String detail = "The API response is missing important security headers:<br><br>" +
+                list + "<br>" +
+                "These headers help protect against various attacks including XSS, " +
+                "clickjacking, and MIME type confusion.";
+        return MontoyaUtils.makeIssue(
+                "API8:2023 - Security Misconfiguration (Missing Security Headers)",
+                detail, API8_BACKGROUND, "Information", "Certain", rr);
     }
 
-    private IScanIssue createMissingHeadersIssue(IHttpRequestResponse baseRequestResponse,
-                                                 List<String> missingHeaders) {
-        StringBuilder headerList = new StringBuilder();
-        for (String header : missingHeaders) {
-            headerList.append("- ").append(header).append(": ")
-                     .append(RECOMMENDED_HEADERS.get(header)).append("<br>");
-        }
-
-        String issueName = "API8:2023 - Security Misconfiguration (Missing Security Headers)";
-        String issueDetail = "The API response is missing important security headers:<br><br>" +
-                           headerList.toString() + "<br>" +
-                           "These headers help protect against various attacks including XSS, " +
-                           "clickjacking, and MIME type confusion.";
-
-        String issueBackground = "API8:2023 - Security Misconfiguration<br><br>" +
-                               "APIs and the systems supporting them typically contain complex configurations, meant to " +
-                               "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
-                               "or don't follow security best practices when it comes to configuration, opening the door for " +
-                               "different types of attacks.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            issueName,
-            issueDetail,
-            issueBackground,
-            "Information",
-            "Certain"
-        );
+    private AuditIssue createDisclosureHeadersIssue(HttpRequestResponse rr, List<String> headers) {
+        StringBuilder list = new StringBuilder();
+        for (String h : headers) list.append("- ").append(h).append("<br>");
+        String detail = "The API response contains headers that disclose server information:<br><br>" +
+                list + "<br>" +
+                "These headers reveal technology stack details that can help attackers " +
+                "identify specific vulnerabilities to exploit.";
+        return MontoyaUtils.makeIssue(
+                "API8:2023 - Security Misconfiguration (Information Disclosure via Headers)",
+                detail, API8_BACKGROUND, "Information", "Certain", rr);
     }
 
-    private IScanIssue createDisclosureHeadersIssue(IHttpRequestResponse baseRequestResponse,
-                                                    List<String> headers) {
-        StringBuilder headerList = new StringBuilder();
-        for (String header : headers) {
-            headerList.append("- ").append(header).append("<br>");
-        }
-
-        String issueName = "API8:2023 - Security Misconfiguration (Information Disclosure via Headers)";
-        String issueDetail = "The API response contains headers that disclose server information:<br><br>" +
-                           headerList.toString() + "<br>" +
-                           "These headers reveal technology stack details that can help attackers " +
-                           "identify specific vulnerabilities to exploit.";
-
-        String issueBackground = "API8:2023 - Security Misconfiguration<br><br>" +
-                               "APIs and the systems supporting them typically contain complex configurations, meant to " +
-                               "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
-                               "or don't follow security best practices when it comes to configuration, opening the door for " +
-                               "different types of attacks.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            issueName,
-            issueDetail,
-            issueBackground,
-            "Information",
-            "Certain"
-        );
+    private AuditIssue createCORSWildcardIssue(HttpRequestResponse rr) {
+        String detail = "The API uses 'Access-Control-Allow-Origin: *' which allows any website to read " +
+                "the API response. While this doesn't allow credential-based attacks, it may expose " +
+                "public API data to unauthorized origins.<br><br>" +
+                "Recommendation: Use specific allowed origins instead of wildcard.";
+        return MontoyaUtils.makeIssue(
+                "API8:2023 - Security Misconfiguration (CORS Wildcard Origin)",
+                detail, API8_BACKGROUND, "Low", "Certain", rr);
     }
 
-    private IScanIssue createCORSWildcardIssue(IHttpRequestResponse baseRequestResponse) {
-        String issueBackground = "API8:2023 - Security Misconfiguration<br><br>" +
-                               "APIs and the systems supporting them typically contain complex configurations, meant to " +
-                               "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
-                               "or don't follow security best practices when it comes to configuration, opening the door for " +
-                               "different types of attacks.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API8:2023 - Security Misconfiguration (CORS Wildcard Origin)",
-            "The API uses 'Access-Control-Allow-Origin: *' which allows any website to read " +
-            "the API response. While this doesn't allow credential-based attacks, it may expose " +
-            "public API data to unauthorized origins.<br><br>" +
-            "Recommendation: Use specific allowed origins instead of wildcard.",
-            issueBackground,
-            "Low",
-            "Certain"
-        );
+    private AuditIssue createCORSCredentialsIssue(HttpRequestResponse rr) {
+        String detail = "The API uses 'Access-Control-Allow-Origin: *' together with " +
+                "'Access-Control-Allow-Credentials: true'. This is invalid and blocked by browsers, " +
+                "but indicates a severe misconfiguration.<br><br>" +
+                "This configuration would allow any website to make authenticated requests to the API.";
+        return MontoyaUtils.makeIssue(
+                "API8:2023 - Security Misconfiguration (CORS Wildcard with Credentials)",
+                detail, API8_BACKGROUND, "High", "Certain", rr);
     }
 
-    private IScanIssue createCORSCredentialsIssue(IHttpRequestResponse baseRequestResponse) {
-        String issueBackground = "API8:2023 - Security Misconfiguration<br><br>" +
-                               "APIs and the systems supporting them typically contain complex configurations, meant to " +
-                               "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
-                               "or don't follow security best practices when it comes to configuration, opening the door for " +
-                               "different types of attacks.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API8:2023 - Security Misconfiguration (CORS Wildcard with Credentials)",
-            "The API uses 'Access-Control-Allow-Origin: *' together with " +
-            "'Access-Control-Allow-Credentials: true'. This is invalid and blocked by browsers, " +
-            "but indicates a severe misconfiguration.<br><br>" +
-            "This configuration would allow any website to make authenticated requests to the API.",
-            issueBackground,
-            "High",
-            "Certain"
-        );
+    private AuditIssue createCORSReflectedIssue(HttpRequestResponse rr, String origin) {
+        String detail = "The API reflects the Origin header in Access-Control-Allow-Origin without validation. " +
+                "This allows any website to read API responses.<br><br>" +
+                "Origin sent: " + origin + "<br>" +
+                "Origin reflected in response<br><br>" +
+                "If credentials are allowed, this enables full cross-origin attacks.";
+        return MontoyaUtils.makeIssue(
+                "API8:2023 - Security Misconfiguration (CORS Reflected Origin)",
+                detail, API8_BACKGROUND, "High", "Firm", rr);
     }
 
-    private IScanIssue createCORSReflectedIssue(IHttpRequestResponse baseRequestResponse, String origin) {
-        String issueBackground = "API8:2023 - Security Misconfiguration<br><br>" +
-                               "APIs and the systems supporting them typically contain complex configurations, meant to " +
-                               "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
-                               "or don't follow security best practices when it comes to configuration, opening the door for " +
-                               "different types of attacks.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API8:2023 - Security Misconfiguration (CORS Reflected Origin)",
-            "The API reflects the Origin header in Access-Control-Allow-Origin without validation. " +
-            "This allows any website to read API responses.<br><br>" +
-            "Origin sent: " + origin + "<br>" +
-            "Origin reflected in response<br><br>" +
-            "If credentials are allowed, this enables full cross-origin attacks.",
-            issueBackground,
-            "High",
-            "Firm"
-        );
+    private AuditIssue createInsecureProtocolIssue(HttpRequestResponse rr) {
+        String detail = "The API is accessible over unencrypted HTTP. All data including authentication " +
+                "tokens, credentials, and sensitive information is transmitted in cleartext and " +
+                "can be intercepted by attackers.<br><br>" +
+                "Recommendation: Use HTTPS exclusively for all API communications.";
+        return MontoyaUtils.makeIssue(
+                "API8:2023 - Security Misconfiguration (API Using HTTP - Insecure)",
+                detail, API8_BACKGROUND, "High", "Certain", rr);
     }
 
-    private IScanIssue createInsecureProtocolIssue(IHttpRequestResponse baseRequestResponse) {
-        String issueBackground = "API8:2023 - Security Misconfiguration<br><br>" +
-                               "APIs and the systems supporting them typically contain complex configurations, meant to " +
-                               "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
-                               "or don't follow security best practices when it comes to configuration, opening the door for " +
-                               "different types of attacks.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API8:2023 - Security Misconfiguration (API Using HTTP - Insecure)",
-            "The API is accessible over unencrypted HTTP. All data including authentication " +
-            "tokens, credentials, and sensitive information is transmitted in cleartext and " +
-            "can be intercepted by attackers.<br><br>" +
-            "Recommendation: Use HTTPS exclusively for all API communications.",
-            issueBackground,
-            "High",
-            "Certain"
-        );
-    }
-
-    private IScanIssue createVerboseErrorIssue(IHttpRequestResponse baseRequestResponse) {
-        String issueBackground = "API8:2023 - Security Misconfiguration<br><br>" +
-                               "APIs and the systems supporting them typically contain complex configurations, meant to " +
-                               "make the APIs more customizable. Software and DevOps engineers can miss these configurations, " +
-                               "or don't follow security best practices when it comes to configuration, opening the door for " +
-                               "different types of attacks.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API8:2023 - Security Misconfiguration (Verbose Error Messages)",
-            "The API returns detailed error messages including stack traces or internal details. " +
-            "This information can help attackers understand the internal structure and identify " +
-            "specific vulnerabilities.<br><br>" +
-            "Recommendation: Return generic error messages to clients and log detailed errors server-side.",
-            issueBackground,
-            "Low",
-            "Firm"
-        );
+    private AuditIssue createVerboseErrorIssue(HttpRequestResponse rr) {
+        String detail = "The API returns detailed error messages including stack traces or internal details. " +
+                "This information can help attackers understand the internal structure and identify " +
+                "specific vulnerabilities.<br><br>" +
+                "Recommendation: Return generic error messages to clients and log detailed errors server-side.";
+        return MontoyaUtils.makeIssue(
+                "API8:2023 - Security Misconfiguration (Verbose Error Messages)",
+                detail, API8_BACKGROUND, "Low", "Firm", rr);
     }
 }

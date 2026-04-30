@@ -1,281 +1,180 @@
 package com.security.burp.checks;
 
-import burp.*;
-import com.security.burp.model.CustomScanIssue;
+import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.http.Http;
+import burp.api.montoya.http.message.HttpHeader;
+import burp.api.montoya.http.message.HttpRequestResponse;
+import burp.api.montoya.http.message.requests.HttpRequest;
+import burp.api.montoya.scanner.AuditResult;
+import burp.api.montoya.scanner.audit.insertionpoint.AuditInsertionPoint;
+import burp.api.montoya.scanner.audit.issues.AuditIssue;
+import burp.api.montoya.scanner.scancheck.ActiveScanCheck;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.interfaces.DecodedJWT;
-import java.io.PrintWriter;
-import java.util.*;
+import com.security.burp.util.MontoyaUtils;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Broken Authentication Check
- * OWASP API2:2023 - Tests for authentication vulnerabilities
+ * OWASP API2:2023 - Broken Authentication
+ * Per Hannah's note this runs as a per-host active check, but performs no
+ * outbound traffic - it inspects credentials present on the base request.
  */
-public class BrokenAuthCheck {
+public class BrokenAuthCheck implements ActiveScanCheck {
 
-    private final IBurpExtenderCallbacks callbacks;
-    private final IExtensionHelpers helpers;
-    private final PrintWriter stdout;
-    private final boolean isDastMode;
+    private final MontoyaApi api;
+    private final boolean isEnterprise;
 
-    public BrokenAuthCheck(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers,
-                          PrintWriter stdout, boolean isDastMode) {
-        this.callbacks = callbacks;
-        this.helpers = helpers;
-        this.stdout = stdout;
-        this.isDastMode = isDastMode;
+    public BrokenAuthCheck(MontoyaApi api, boolean isEnterprise) {
+        this.api = api;
+        this.isEnterprise = isEnterprise;
     }
 
-    public List<IScanIssue> checkAuthentication(IHttpRequestResponse baseRequestResponse) {
-        List<IScanIssue> issues = new ArrayList<>();
+    @Override
+    public String checkName() {
+        return "API2:2023 Broken Authentication";
+    }
 
+    @Override
+    public AuditResult doCheck(HttpRequestResponse rr, AuditInsertionPoint ip, Http http) {
+        List<AuditIssue> issues = new ArrayList<>();
         try {
-            IRequestInfo requestInfo = helpers.analyzeRequest(baseRequestResponse);
-            List<String> headers = requestInfo.getHeaders();
-
-            stdout.println("[Auth Check] Analyzing authentication mechanisms");
-
-            // Check JWT tokens
-            issues.addAll(checkJWTVulnerabilities(baseRequestResponse, headers));
-
-            // Check for weak authentication
-            issues.addAll(checkWeakAuthentication(baseRequestResponse, headers));
-
-            // Check token expiration
-            issues.addAll(checkTokenExpiration(baseRequestResponse));
-
+            api.logging().logToOutput("[Auth Check] Analyzing authentication mechanisms");
+            HttpRequest request = rr.request();
+            issues.addAll(checkJWTVulnerabilities(rr, request));
+            issues.addAll(checkWeakAuthentication(rr, request));
         } catch (Exception e) {
-            stdout.println("[Auth Check] Error: " + e.getMessage());
+            api.logging().logToError("[Auth Check] " + e.getMessage());
         }
-
-        return issues;
+        return AuditResult.auditResult(issues);
     }
 
-    private List<IScanIssue> checkJWTVulnerabilities(IHttpRequestResponse baseRequestResponse,
-                                                     List<String> headers) {
-        List<IScanIssue> issues = new ArrayList<>();
-
+    private List<AuditIssue> checkJWTVulnerabilities(HttpRequestResponse rr, HttpRequest request) {
+        List<AuditIssue> issues = new ArrayList<>();
         try {
-            for (String header : headers) {
-                if (header.toLowerCase().startsWith("authorization: bearer ")) {
-                    String token = header.substring(22).trim();
+            for (HttpHeader header : request.headers()) {
+                if (header.name().equalsIgnoreCase("Authorization")) {
+                    String value = header.value();
+                    if (value != null && value.toLowerCase().startsWith("bearer ")) {
+                        String token = value.substring("bearer ".length()).trim();
+                        try {
+                            DecodedJWT jwt = JWT.decode(token);
+                            api.logging().logToOutput("[Auth Check] JWT found, analyzing...");
 
-                    try {
-                        DecodedJWT jwt = JWT.decode(token);
-
-                        stdout.println("[Auth Check] JWT found, analyzing...");
-
-                        // Check 1: No signature (alg: none)
-                        if ("none".equalsIgnoreCase(jwt.getAlgorithm())) {
-                            stdout.println("[Auth Check] ⚠️  JWT uses 'none' algorithm!");
-                            issues.add(createJWTNoneAlgIssue(baseRequestResponse, token));
-                        }
-
-                        // Check 2: Weak algorithms
-                        if ("HS256".equalsIgnoreCase(jwt.getAlgorithm()) ||
-                            "HS384".equalsIgnoreCase(jwt.getAlgorithm()) ||
-                            "HS512".equalsIgnoreCase(jwt.getAlgorithm())) {
-                            stdout.println("[Auth Check] ⚠️  JWT uses symmetric algorithm (HMAC)");
-                            issues.add(createWeakJWTAlgIssue(baseRequestResponse, jwt.getAlgorithm()));
-                        }
-
-                        // Check 3: No expiration
-                        if (jwt.getExpiresAt() == null) {
-                            stdout.println("[Auth Check] ⚠️  JWT has no expiration!");
-                            issues.add(createJWTNoExpirationIssue(baseRequestResponse));
-                        }
-
-                        // Check 4: Long expiration (> 24 hours)
-                        if (jwt.getExpiresAt() != null) {
-                            long expiresIn = jwt.getExpiresAt().getTime() - System.currentTimeMillis();
-                            long hoursUntilExpiry = expiresIn / (1000 * 60 * 60);
-                            if (hoursUntilExpiry > 24) {
-                                stdout.println("[Auth Check] ⚠️  JWT expires in " + hoursUntilExpiry + " hours");
-                                issues.add(createJWTLongExpirationIssue(baseRequestResponse, hoursUntilExpiry));
+                            if ("none".equalsIgnoreCase(jwt.getAlgorithm())) {
+                                api.logging().logToOutput("[Auth Check] JWT uses 'none' algorithm!");
+                                issues.add(createJWTNoneAlgIssue(rr, token));
                             }
+                            String alg = jwt.getAlgorithm();
+                            if ("HS256".equalsIgnoreCase(alg) || "HS384".equalsIgnoreCase(alg) ||
+                                "HS512".equalsIgnoreCase(alg)) {
+                                api.logging().logToOutput("[Auth Check] JWT uses symmetric algorithm (HMAC)");
+                                issues.add(createWeakJWTAlgIssue(rr, alg));
+                            }
+                            if (jwt.getExpiresAt() == null) {
+                                api.logging().logToOutput("[Auth Check] JWT has no expiration!");
+                                issues.add(createJWTNoExpirationIssue(rr));
+                            } else {
+                                long expiresIn = jwt.getExpiresAt().getTime() - System.currentTimeMillis();
+                                long hoursUntilExpiry = expiresIn / (1000 * 60 * 60);
+                                if (hoursUntilExpiry > 24) {
+                                    api.logging().logToOutput("[Auth Check] JWT expires in " + hoursUntilExpiry + " hours");
+                                    issues.add(createJWTLongExpirationIssue(rr, hoursUntilExpiry));
+                                }
+                            }
+                        } catch (Exception e) {
+                            api.logging().logToOutput("[Auth Check] Could not decode JWT: " + e.getMessage());
                         }
-
-                    } catch (Exception e) {
-                        // Not a valid JWT or couldn't decode
-                        stdout.println("[Auth Check] Could not decode JWT: " + e.getMessage());
                     }
                 }
             }
         } catch (Exception e) {
-            stdout.println("[Auth Check] JWT check error: " + e.getMessage());
+            api.logging().logToError("[Auth Check] JWT check error: " + e.getMessage());
         }
-
         return issues;
     }
 
-    private List<IScanIssue> checkWeakAuthentication(IHttpRequestResponse baseRequestResponse,
-                                                     List<String> headers) {
-        List<IScanIssue> issues = new ArrayList<>();
-
+    private List<AuditIssue> checkWeakAuthentication(HttpRequestResponse rr, HttpRequest request) {
+        List<AuditIssue> issues = new ArrayList<>();
         try {
-            for (String header : headers) {
-                String lowerHeader = header.toLowerCase();
-
-                // Check for Basic Auth
-                if (lowerHeader.startsWith("authorization: basic ")) {
-                    stdout.println("[Auth Check] ⚠️  Basic authentication detected");
-                    issues.add(createBasicAuthIssue(baseRequestResponse));
+            for (HttpHeader header : request.headers()) {
+                String name = header.name().toLowerCase();
+                String value = header.value() == null ? "" : header.value();
+                if (name.equals("authorization") && value.toLowerCase().startsWith("basic ")) {
+                    api.logging().logToOutput("[Auth Check] Basic authentication detected");
+                    issues.add(createBasicAuthIssue(rr));
                 }
-
-                // Check for API keys in headers
-                if (lowerHeader.startsWith("x-api-key:") ||
-                    lowerHeader.startsWith("api-key:") ||
-                    lowerHeader.startsWith("apikey:")) {
-                    stdout.println("[Auth Check] API key authentication detected");
-                    // Check if over HTTP
-                    if (helpers.analyzeRequest(baseRequestResponse).getUrl().getProtocol().equals("http")) {
-                        issues.add(createInsecureApiKeyIssue(baseRequestResponse));
-                    }
+                if (name.equals("x-api-key") || name.equals("api-key") || name.equals("apikey")) {
+                    api.logging().logToOutput("[Auth Check] API key authentication detected");
+                    try {
+                        if (!request.httpService().secure()) {
+                            issues.add(createInsecureApiKeyIssue(rr));
+                        }
+                    } catch (Exception ignored) {}
                 }
             }
         } catch (Exception e) {
-            stdout.println("[Auth Check] Weak auth check error: " + e.getMessage());
+            api.logging().logToError("[Auth Check] Weak auth check error: " + e.getMessage());
         }
-
         return issues;
     }
 
-    private List<IScanIssue> checkTokenExpiration(IHttpRequestResponse baseRequestResponse) {
-        List<IScanIssue> issues = new ArrayList<>();
+    private static final String API2_BACKGROUND =
+            "API2:2023 - Broken Authentication<br><br>" +
+            "Authentication mechanisms are often implemented incorrectly, allowing attackers " +
+            "to compromise authentication tokens or to exploit implementation flaws to assume " +
+            "other user's identities temporarily or permanently. Compromising a system's ability " +
+            "to identify the client/user, compromises API security overall.";
 
-        // This would require storing tokens and retesting later
-        // For now, we'll just flag information about token mechanisms
-
-        return issues;
+    private AuditIssue createJWTNoneAlgIssue(HttpRequestResponse rr, String token) {
+        String detail = "The API accepts JWT tokens with algorithm 'none', which means no signature verification. " +
+                "An attacker can forge arbitrary tokens by setting the algorithm to 'none' and removing the signature.<br><br>" +
+                "Token: " + token.substring(0, Math.min(50, token.length())) + "...<br><br>" +
+                "This completely bypasses authentication and is a critical vulnerability.";
+        return MontoyaUtils.makeIssue("API2:2023 - Broken Authentication (JWT 'none' Algorithm)",
+                detail, API2_BACKGROUND, "Critical", "Certain", rr);
     }
 
-    private IScanIssue createJWTNoneAlgIssue(IHttpRequestResponse baseRequestResponse, String token) {
-        String issueBackground = "API2:2023 - Broken Authentication<br><br>" +
-                               "Authentication mechanisms are often implemented incorrectly, allowing attackers " +
-                               "to compromise authentication tokens or to exploit implementation flaws to assume " +
-                               "other user's identities temporarily or permanently. Compromising a system's ability " +
-                               "to identify the client/user, compromises API security overall.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API2:2023 - Broken Authentication (JWT 'none' Algorithm)",
-            "The API accepts JWT tokens with algorithm 'none', which means no signature verification. " +
-            "An attacker can forge arbitrary tokens by setting the algorithm to 'none' and removing the signature.<br><br>" +
-            "Token: " + token.substring(0, Math.min(50, token.length())) + "...<br><br>" +
-            "This completely bypasses authentication and is a critical vulnerability.",
-            issueBackground,
-            "Critical",
-            "Certain"
-        );
+    private AuditIssue createWeakJWTAlgIssue(HttpRequestResponse rr, String algorithm) {
+        String detail = "The API uses a symmetric HMAC algorithm (" + algorithm + ") for JWT signatures. " +
+                "This is weaker than asymmetric algorithms (RS256, ES256) and requires the same secret " +
+                "to be shared between multiple services, increasing the attack surface.<br><br>" +
+                "Recommendation: Use RS256 (RSA) or ES256 (ECDSA) instead.";
+        return MontoyaUtils.makeIssue("API2:2023 - Broken Authentication (Weak JWT Algorithm: " + algorithm + ")",
+                detail, API2_BACKGROUND, "Low", "Certain", rr);
     }
 
-    private IScanIssue createWeakJWTAlgIssue(IHttpRequestResponse baseRequestResponse, String algorithm) {
-        String issueBackground = "API2:2023 - Broken Authentication<br><br>" +
-                               "Authentication mechanisms are often implemented incorrectly, allowing attackers " +
-                               "to compromise authentication tokens or to exploit implementation flaws to assume " +
-                               "other user's identities temporarily or permanently. Compromising a system's ability " +
-                               "to identify the client/user, compromises API security overall.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API2:2023 - Broken Authentication (Weak JWT Algorithm: " + algorithm + ")",
-            "The API uses a symmetric HMAC algorithm (" + algorithm + ") for JWT signatures. " +
-            "This is weaker than asymmetric algorithms (RS256, ES256) and requires the same secret " +
-            "to be shared between multiple services, increasing the attack surface.<br><br>" +
-            "Recommendation: Use RS256 (RSA) or ES256 (ECDSA) instead.",
-            issueBackground,
-            "Low",
-            "Certain"
-        );
+    private AuditIssue createJWTNoExpirationIssue(HttpRequestResponse rr) {
+        String detail = "The JWT token does not contain an 'exp' (expiration) claim. This means the token " +
+                "never expires and can be used indefinitely if compromised.<br><br>" +
+                "Recommendation: Always set expiration times on JWTs (e.g., 1-24 hours).";
+        return MontoyaUtils.makeIssue("API2:2023 - Broken Authentication (JWT Without Expiration)",
+                detail, API2_BACKGROUND, "Medium", "Certain", rr);
     }
 
-    private IScanIssue createJWTNoExpirationIssue(IHttpRequestResponse baseRequestResponse) {
-        String issueBackground = "API2:2023 - Broken Authentication<br><br>" +
-                               "Authentication mechanisms are often implemented incorrectly, allowing attackers " +
-                               "to compromise authentication tokens or to exploit implementation flaws to assume " +
-                               "other user's identities temporarily or permanently. Compromising a system's ability " +
-                               "to identify the client/user, compromises API security overall.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API2:2023 - Broken Authentication (JWT Without Expiration)",
-            "The JWT token does not contain an 'exp' (expiration) claim. This means the token " +
-            "never expires and can be used indefinitely if compromised.<br><br>" +
-            "Recommendation: Always set expiration times on JWTs (e.g., 1-24 hours).",
-            issueBackground,
-            "Medium",
-            "Certain"
-        );
+    private AuditIssue createJWTLongExpirationIssue(HttpRequestResponse rr, long hours) {
+        String detail = "The JWT token expires in " + hours + " hours. Long-lived tokens increase the " +
+                "window of opportunity for attackers if the token is compromised.<br><br>" +
+                "Recommendation: Use shorter expiration times (e.g., 1-24 hours) and implement refresh tokens.";
+        return MontoyaUtils.makeIssue("API2:2023 - Broken Authentication (Long JWT Expiration)",
+                detail, API2_BACKGROUND, "Low", "Certain", rr);
     }
 
-    private IScanIssue createJWTLongExpirationIssue(IHttpRequestResponse baseRequestResponse,
-                                                    long hours) {
-        String issueBackground = "API2:2023 - Broken Authentication<br><br>" +
-                               "Authentication mechanisms are often implemented incorrectly, allowing attackers " +
-                               "to compromise authentication tokens or to exploit implementation flaws to assume " +
-                               "other user's identities temporarily or permanently. Compromising a system's ability " +
-                               "to identify the client/user, compromises API security overall.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API2:2023 - Broken Authentication (Long JWT Expiration)",
-            "The JWT token expires in " + hours + " hours. Long-lived tokens increase the " +
-            "window of opportunity for attackers if the token is compromised.<br><br>" +
-            "Recommendation: Use shorter expiration times (e.g., 1-24 hours) and implement refresh tokens.",
-            issueBackground,
-            "Low",
-            "Certain"
-        );
+    private AuditIssue createBasicAuthIssue(HttpRequestResponse rr) {
+        String detail = "The API uses HTTP Basic Authentication, which transmits credentials in Base64 encoding " +
+                "(easily decoded). While acceptable over HTTPS, this is weaker than modern token-based " +
+                "authentication and requires sending credentials with every request.<br><br>" +
+                "Recommendation: Use OAuth 2.0, JWT, or other token-based authentication.";
+        return MontoyaUtils.makeIssue("API2:2023 - Broken Authentication (HTTP Basic Authentication)",
+                detail, API2_BACKGROUND, "Information", "Certain", rr);
     }
 
-    private IScanIssue createBasicAuthIssue(IHttpRequestResponse baseRequestResponse) {
-        String issueBackground = "API2:2023 - Broken Authentication<br><br>" +
-                               "Authentication mechanisms are often implemented incorrectly, allowing attackers " +
-                               "to compromise authentication tokens or to exploit implementation flaws to assume " +
-                               "other user's identities temporarily or permanently. Compromising a system's ability " +
-                               "to identify the client/user, compromises API security overall.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API2:2023 - Broken Authentication (HTTP Basic Authentication)",
-            "The API uses HTTP Basic Authentication, which transmits credentials in Base64 encoding " +
-            "(easily decoded). While acceptable over HTTPS, this is weaker than modern token-based " +
-            "authentication and requires sending credentials with every request.<br><br>" +
-            "Recommendation: Use OAuth 2.0, JWT, or other token-based authentication.",
-            issueBackground,
-            "Information",
-            "Certain"
-        );
-    }
-
-    private IScanIssue createInsecureApiKeyIssue(IHttpRequestResponse baseRequestResponse) {
-        String issueBackground = "API2:2023 - Broken Authentication<br><br>" +
-                               "Authentication mechanisms are often implemented incorrectly, allowing attackers " +
-                               "to compromise authentication tokens or to exploit implementation flaws to assume " +
-                               "other user's identities temporarily or permanently. Compromising a system's ability " +
-                               "to identify the client/user, compromises API security overall.";
-
-        return new CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            new IHttpRequestResponse[]{baseRequestResponse},
-            "API2:2023 - Broken Authentication (API Key Over HTTP)",
-            "The API key is being transmitted over unencrypted HTTP. API keys transmitted in " +
-            "cleartext can be intercepted by attackers through man-in-the-middle attacks.<br><br>" +
-            "Recommendation: Always use HTTPS for API communications.",
-            issueBackground,
-            "High",
-            "Certain"
-        );
+    private AuditIssue createInsecureApiKeyIssue(HttpRequestResponse rr) {
+        String detail = "The API key is being transmitted over unencrypted HTTP. API keys transmitted in " +
+                "cleartext can be intercepted by attackers through man-in-the-middle attacks.<br><br>" +
+                "Recommendation: Always use HTTPS for API communications.";
+        return MontoyaUtils.makeIssue("API2:2023 - Broken Authentication (API Key Over HTTP)",
+                detail, API2_BACKGROUND, "High", "Certain", rr);
     }
 }
