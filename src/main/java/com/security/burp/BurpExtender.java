@@ -1,6 +1,7 @@
 package com.security.burp;
 
 import burp.api.montoya.BurpExtension;
+import burp.api.montoya.EnhancedCapability;
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.BurpSuiteEdition;
 import burp.api.montoya.scanner.scancheck.ScanCheckType;
@@ -12,8 +13,17 @@ import com.security.burp.util.AiFieldDiscovery;
 import com.security.burp.util.AiTriage;
 
 import javax.swing.SwingUtilities;
+import java.util.Set;
 
 public class BurpExtender implements BurpExtension {
+
+    @Override
+    public Set<EnhancedCapability> enhancedCapabilities() {
+        // Required for api.ai().isEnabled() to return true. Without this
+        // declaration Burp won't grant the extension AI access even when
+        // suite-level AI is enabled.
+        return Set.of(EnhancedCapability.AI_FEATURES);
+    }
 
     @Override
     public void initialize(MontoyaApi api) {
