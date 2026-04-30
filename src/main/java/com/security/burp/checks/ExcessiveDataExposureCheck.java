@@ -9,6 +9,7 @@ import burp.api.montoya.scanner.audit.issues.AuditIssue;
 import burp.api.montoya.scanner.scancheck.PassiveScanCheck;
 import com.google.gson.*;
 import com.security.burp.scanner.EndpointRegistry;
+import com.security.burp.util.AiTriage;
 import com.security.burp.util.MontoyaUtils;
 
 import java.util.*;
@@ -27,10 +28,12 @@ public class ExcessiveDataExposureCheck implements PassiveScanCheck {
 
     private final MontoyaApi api;
     private final EndpointRegistry registry;
+    private final AiTriage triage;
 
-    public ExcessiveDataExposureCheck(MontoyaApi api, EndpointRegistry registry) {
+    public ExcessiveDataExposureCheck(MontoyaApi api, EndpointRegistry registry, AiTriage triage) {
         this.api = api;
         this.registry = registry;
+        this.triage = triage;
     }
 
     @Override
@@ -51,16 +54,16 @@ public class ExcessiveDataExposureCheck implements PassiveScanCheck {
                 }
             } catch (Exception ignored) {}
 
-            if (!rr.hasResponse()) return AuditResult.auditResult(issues);
+            if (!rr.hasResponse()) return AuditResult.auditResult(triage.filter(issues, rr));
             HttpResponse response = rr.response();
 
             String contentType = MontoyaUtils.contentType(response);
             if (contentType == null || !contentType.contains("application/json")) {
-                return AuditResult.auditResult(issues);
+                return AuditResult.auditResult(triage.filter(issues, rr));
             }
 
             String responseBody = response.bodyToString();
-            if (responseBody.isEmpty()) return AuditResult.auditResult(issues);
+            if (responseBody.isEmpty()) return AuditResult.auditResult(triage.filter(issues, rr));
 
             try {
                 JsonElement jsonElement = JsonParser.parseString(responseBody);
@@ -91,7 +94,7 @@ public class ExcessiveDataExposureCheck implements PassiveScanCheck {
         } catch (Exception e) {
             api.logging().logToError("[Data Exposure] " + e.getMessage());
         }
-        return AuditResult.auditResult(issues);
+        return AuditResult.auditResult(triage.filter(issues, rr));
     }
 
     private List<String> findSensitiveFields(JsonElement element, String path) {

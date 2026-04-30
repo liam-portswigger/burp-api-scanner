@@ -10,10 +10,12 @@ import burp.api.montoya.scanner.audit.insertionpoint.AuditInsertionPoint;
 import burp.api.montoya.scanner.audit.issues.AuditIssue;
 import burp.api.montoya.scanner.scancheck.ActiveScanCheck;
 import com.google.gson.*;
+import com.security.burp.util.AiFieldDiscovery;
 import com.security.burp.util.MontoyaUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,14 +35,16 @@ public class MassAssignmentCheck implements ActiveScanCheck {
 
     private final MontoyaApi api;
     private final boolean isEnterprise;
+    private final AiFieldDiscovery aiDiscovery;
     // Dedupe: per-host scan check would still re-run, but PER_INSERTION_POINT
     // means many invocations for one request. We only need to do mass-assignment
     // once per (host+path+method+body-hash) base request.
     private final Set<String> processed = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    public MassAssignmentCheck(MontoyaApi api, boolean isEnterprise) {
+    public MassAssignmentCheck(MontoyaApi api, boolean isEnterprise, AiFieldDiscovery aiDiscovery) {
         this.api = api;
         this.isEnterprise = isEnterprise;
+        this.aiDiscovery = aiDiscovery;
     }
 
     @Override
@@ -79,7 +83,22 @@ public class MassAssignmentCheck implements ActiveScanCheck {
             if (!jsonElement.isJsonObject()) return AuditResult.auditResult(issues);
             JsonObject originalJson = jsonElement.getAsJsonObject();
 
-            for (String field : SENSITIVE_FIELDS) {
+            // Hardcoded list first.
+            Set<String> fields = new LinkedHashSet<>();
+            for (String f : SENSITIVE_FIELDS) fields.add(f);
+
+            // AI-suggested contextual fields (e.g. accountTier, organizationRole)
+            // augment the hardcoded list when Burp AI is available.
+            if (aiDiscovery != null && aiDiscovery.isAvailable()) {
+                List<String> aiFields = aiDiscovery.suggestFields(
+                        request.httpService().host(),
+                        request.pathWithoutQuery(),
+                        request.method(),
+                        body);
+                fields.addAll(aiFields);
+            }
+
+            for (String field : fields) {
                 List<AuditIssue> found = testSensitiveField(rr, http, originalJson, field);
                 issues.addAll(found);
             }

@@ -7,6 +7,9 @@ import burp.api.montoya.scanner.scancheck.ScanCheckType;
 import com.security.burp.checks.*;
 import com.security.burp.scanner.EndpointRegistry;
 import com.security.burp.ui.ScannerTab;
+import com.security.burp.util.AiClient;
+import com.security.burp.util.AiFieldDiscovery;
+import com.security.burp.util.AiTriage;
 
 import javax.swing.SwingUtilities;
 
@@ -22,6 +25,14 @@ public class BurpExtender implements BurpExtension {
 
         EndpointRegistry registry = new EndpointRegistry();
 
+        // Burp AI: optional. AiClient.isAvailable() gates everything; if AI is
+        // disabled in Burp or unavailable in this edition, all AI features
+        // no-op gracefully.
+        AiClient aiClient = new AiClient(api);
+        AiTriage aiTriage = new AiTriage(api, aiClient);
+        AiFieldDiscovery aiDiscovery = new AiFieldDiscovery(api, aiClient);
+        api.logging().logToOutput("AI features: " + (aiClient.isAvailable() ? "enabled" : "disabled"));
+
         // ---------- Active scan checks ----------
         // PER_INSERTION_POINT: mutate parameters
         api.scanner().registerActiveScanCheck(
@@ -29,7 +40,7 @@ public class BurpExtender implements BurpExtension {
         api.scanner().registerActiveScanCheck(
                 new SsrfCheck(api, isEnterprise), ScanCheckType.PER_INSERTION_POINT);
         api.scanner().registerActiveScanCheck(
-                new MassAssignmentCheck(api, isEnterprise), ScanCheckType.PER_INSERTION_POINT);
+                new MassAssignmentCheck(api, isEnterprise, aiDiscovery), ScanCheckType.PER_INSERTION_POINT);
 
         // PER_HOST: test endpoints / methods rather than parameters
         api.scanner().registerActiveScanCheck(
@@ -44,18 +55,20 @@ public class BurpExtender implements BurpExtension {
                 new BrokenAuthCheck(api, isEnterprise), ScanCheckType.PER_HOST);
 
         // ---------- Passive scan checks ----------
+        // Each takes the AiTriage so noisy passive findings can be filtered
+        // by the AI before they're surfaced. If AI is disabled, triage no-ops.
         api.scanner().registerPassiveScanCheck(
-                new ExcessiveDataExposureCheck(api, registry), ScanCheckType.PER_REQUEST);
+                new ExcessiveDataExposureCheck(api, registry, aiTriage), ScanCheckType.PER_REQUEST);
         api.scanner().registerPassiveScanCheck(
-                new SecurityMisconfigCheck(api, registry), ScanCheckType.PER_REQUEST);
+                new SecurityMisconfigCheck(api, registry, aiTriage), ScanCheckType.PER_REQUEST);
         api.scanner().registerPassiveScanCheck(
-                new ResourceConsumptionCheck(api, registry), ScanCheckType.PER_REQUEST);
+                new ResourceConsumptionCheck(api, registry, aiTriage), ScanCheckType.PER_REQUEST);
         api.scanner().registerPassiveScanCheck(
-                new BusinessFlowCheck(api, registry), ScanCheckType.PER_REQUEST);
+                new BusinessFlowCheck(api, registry, aiTriage), ScanCheckType.PER_REQUEST);
         api.scanner().registerPassiveScanCheck(
-                new InventoryManagementCheck(api, registry), ScanCheckType.PER_REQUEST);
+                new InventoryManagementCheck(api, registry, aiTriage), ScanCheckType.PER_REQUEST);
         api.scanner().registerPassiveScanCheck(
-                new UnsafeApiConsumptionCheck(api, registry), ScanCheckType.PER_REQUEST);
+                new UnsafeApiConsumptionCheck(api, registry, aiTriage), ScanCheckType.PER_REQUEST);
 
         // UI tab - skip for Enterprise (headless).
         if (!isEnterprise) {

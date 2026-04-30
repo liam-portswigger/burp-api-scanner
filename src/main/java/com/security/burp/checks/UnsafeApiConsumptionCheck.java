@@ -8,6 +8,7 @@ import burp.api.montoya.scanner.AuditResult;
 import burp.api.montoya.scanner.audit.issues.AuditIssue;
 import burp.api.montoya.scanner.scancheck.PassiveScanCheck;
 import com.security.burp.scanner.EndpointRegistry;
+import com.security.burp.util.AiTriage;
 import com.security.burp.util.MontoyaUtils;
 
 import java.util.ArrayList;
@@ -26,10 +27,12 @@ public class UnsafeApiConsumptionCheck implements PassiveScanCheck {
 
     private final MontoyaApi api;
     private final EndpointRegistry registry;
+    private final AiTriage triage;
 
-    public UnsafeApiConsumptionCheck(MontoyaApi api, EndpointRegistry registry) {
+    public UnsafeApiConsumptionCheck(MontoyaApi api, EndpointRegistry registry, AiTriage triage) {
         this.api = api;
         this.registry = registry;
+        this.triage = triage;
     }
 
     @Override
@@ -46,7 +49,7 @@ public class UnsafeApiConsumptionCheck implements PassiveScanCheck {
                 registry.record(request.httpService().host(), request.pathWithoutQuery(), request.method());
             } catch (Exception ignored) {}
 
-            if (!rr.hasResponse()) return AuditResult.auditResult(issues);
+            if (!rr.hasResponse()) return AuditResult.auditResult(triage.filter(issues, rr));
             HttpResponse response = rr.response();
 
             String responseBody = response.bodyToString();
@@ -72,7 +75,7 @@ public class UnsafeApiConsumptionCheck implements PassiveScanCheck {
         } catch (Exception e) {
             api.logging().logToError("[API Consumption] " + e.getMessage());
         }
-        return AuditResult.auditResult(issues);
+        return AuditResult.auditResult(triage.filter(issues, rr));
     }
 
     private boolean hasValidationIndicators(String responseBody) {

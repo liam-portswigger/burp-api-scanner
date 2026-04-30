@@ -9,6 +9,7 @@ import burp.api.montoya.scanner.AuditResult;
 import burp.api.montoya.scanner.audit.issues.AuditIssue;
 import burp.api.montoya.scanner.scancheck.PassiveScanCheck;
 import com.security.burp.scanner.EndpointRegistry;
+import com.security.burp.util.AiTriage;
 import com.security.burp.util.MontoyaUtils;
 
 import java.util.ArrayList;
@@ -21,10 +22,12 @@ public class InventoryManagementCheck implements PassiveScanCheck {
 
     private final MontoyaApi api;
     private final EndpointRegistry registry;
+    private final AiTriage triage;
 
-    public InventoryManagementCheck(MontoyaApi api, EndpointRegistry registry) {
+    public InventoryManagementCheck(MontoyaApi api, EndpointRegistry registry, AiTriage triage) {
         this.api = api;
         this.registry = registry;
+        this.triage = triage;
     }
 
     @Override
@@ -41,7 +44,7 @@ public class InventoryManagementCheck implements PassiveScanCheck {
                 registry.record(request.httpService().host(), request.pathWithoutQuery(), request.method());
             } catch (Exception ignored) {}
 
-            if (!rr.hasResponse()) return AuditResult.auditResult(issues);
+            if (!rr.hasResponse()) return AuditResult.auditResult(triage.filter(issues, rr));
             HttpResponse response = rr.response();
             String path = request.pathWithoutQuery();
 
@@ -65,7 +68,7 @@ public class InventoryManagementCheck implements PassiveScanCheck {
         } catch (Exception e) {
             api.logging().logToError("[Inventory Check] " + e.getMessage());
         }
-        return AuditResult.auditResult(issues);
+        return AuditResult.auditResult(triage.filter(issues, rr));
     }
 
     private boolean isDeprecatedApiVersion(String path) {
