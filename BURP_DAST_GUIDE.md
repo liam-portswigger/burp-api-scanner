@@ -30,26 +30,35 @@ Passive audit.
 
 ## Verifying the load
 
-The extension banner appears in the extension's output stream. On a
-healthy load it reads:
+DAST runs headless — there is **no interactive Output tab** to read the
+startup banner in (that surface only exists in Professional / Community).
+Verify the extension in DAST like this:
+
+1. Open the scan's **Settings** tab and confirm the extension is listed
+   under **Extensions** (e.g. `burp-api-scanner-2.3.2.jar`). This proves
+   it loaded and was applied to the scan.
+2. After the scan runs, open the **Issues** tab and confirm findings
+   labelled `APIx:2023` are present — this confirms the extension's
+   checks actually executed against the site.
+
+The banner (extension name, edition via `BurpSuiteEdition.displayName()`,
+and AI-features state) is still emitted to the extension's output stream
+in every edition — it is just not viewable in an interactive tab under
+DAST. If AI features report `disabled` when you expect them on, the most
+common cause is that Burp AI isn't enabled at the suite level, not an
+extension fault.
+
+In **Professional / Community**, the banner is visible directly in the
+extension's Output tab and reads:
 
 ```
 ====================================
 OWASP API Security Top 10 Scanner v2.3.2
 OWASP API Security Top 10 (2023) coverage
-Edition: Burp Suite DAST
+Edition: Burp Suite Professional
 AI features: enabled       (or "disabled" if Burp AI is off)
 ====================================
 ```
-
-The `Edition:` line uses `BurpSuiteEdition.displayName()`, so the value
-matches the running product exactly (`Burp Suite DAST`,
-`Burp Suite Professional`, or `Burp Suite Community`).
-
-The `AI features:` line reports whether `api.ai().isEnabled()` returned
-true. If it says `disabled` when you expect AI to be on, the most
-common cause is that Burp AI isn't enabled at the suite level — not an
-extension fault.
 
 ## OWASP API Top 10 coverage
 
@@ -125,9 +134,9 @@ Kill switches (JVM system properties on the DAST process):
 
 Before running production scans:
 
-- [ ] Extension JAR loaded and enabled in Settings → Extensions
-- [ ] Banner shows `v2.3.2`, the correct `Edition:`, and the expected
-      `AI features:` state
+- [ ] Extension JAR listed under the scan's **Settings → Extensions**
+- [ ] After a test scan, `APIx:2023` findings appear in the **Issues**
+      tab (confirms the checks executed)
 - [ ] Scan configuration includes Active + Passive audit (passive-only
       will not surface the active findings — injection, SSRF, BOLA,
       mass assignment, TRACE, version probing, parameter pollution)
