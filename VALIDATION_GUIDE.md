@@ -201,6 +201,35 @@ deprecated on its own — it is the current version on most APIs.)
 - Check whether the old version misses security fixes documented for
   the new version.
 
+### API9:2023 — GraphQL field suggestions enabled
+
+**Finding:** a query for the misspelled meta-field `__typenaem` returned
+a "Did you mean …" hint, so the server leaks field names on unknown-field
+errors — schema recovery is possible even with introspection disabled.
+
+**Questions to answer:** Is introspection also on (then this is moot —
+the schema is already public)? If introspection is off, this defeats that
+control.
+
+**How to validate:** in Repeater, send `{ __typenaem }` and confirm the
+suggestion; then query another misspelled field name and observe the
+server hinting real field names. Cross-check Burp's native *GraphQL
+introspection enabled* issue for the same endpoint.
+
+### API4:2023 — GraphQL query batching enabled
+
+**Finding:** a JSON array of two operations was accepted and both were
+executed (a two-element result array returned).
+
+**Questions to answer:** Does the endpoint expose a sensitive operation
+(login, OTP, password reset) that batching/aliasing could amplify past a
+per-request rate limit?
+
+**How to validate:** in Repeater, batch (or alias) a sensitive mutation N
+times in one request and check whether all N attempts are processed and
+whether rate limiting counts operations or only HTTP requests. Batching
+alone is only impactful when paired with such an operation.
+
 ---
 
 ## TENTATIVE — heuristic, high false-positive rate

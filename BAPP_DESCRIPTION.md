@@ -14,6 +14,7 @@ This extension provides coverage of all ten OWASP API Security Top 10 (2023) cat
 * All ten OWASP API Security Top 10 (2023) categories in a single extension, with every finding labelled by category so scan output maps straight onto the framework for reporting.
 * Coverage of the four API-specific risks that native scanning does not address: unrestricted resource consumption, unrestricted access to sensitive business flows, improper inventory management, and unsafe consumption of APIs.
 * Active discovery of deprecated API versions left reachable in production, by probing earlier versions of any `/vN/` path.
+* GraphQL-specific checks that native scanning does not perform: field-suggestion leakage ("Did you mean …", which lets an attacker recover the schema even when introspection is disabled) and array query batching (a rate-limit-bypass and brute-force amplification primitive).
 * Detection tuned to keep noise down: broken object level authorization fires only when a manipulated identifier returns a materially different object, and parameter pollution measures an endpoint's natural response variation before reporting length-based differences.
 * Optional AI assistance that filters false positives on noise-prone passive checks and suggests context-specific mass-assignment fields to test.
 

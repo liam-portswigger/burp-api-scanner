@@ -36,7 +36,7 @@ registered only under Professional.
 mvn clean package -DskipTests
 ```
 
-Produces `target/burp-api-scanner-2.3.2.jar`. Load via **Extensions →
+Produces `target/burp-api-scanner-2.4.0.jar`. Load via **Extensions →
 Installed → Add → Java**.
 
 Requires JDK 17+ (Montoya API requirement) and Maven 3.6+.
@@ -45,7 +45,7 @@ The banner in the extension's Output tab will look like:
 
 ```
 ====================================
-OWASP API Security Top 10 Scanner v2.3.2
+OWASP API Security Top 10 Scanner v2.4.0
 OWASP API Security Top 10 (2023) coverage
 Edition: Burp Suite Professional
 AI features: enabled
@@ -54,19 +54,19 @@ AI features: enabled
 
 ## Coverage
 
-Full OWASP API Security Top 10 (2023), 15 checks:
+Full OWASP API Security Top 10 (2023), 16 checks:
 
 | OWASP category | Detection | Related native check(s) |
 |---|---|---|
 | API1:2023 — Broken Object Level Authorization | Active | Broken access control |
 | API2:2023 — Broken Authentication | Active | JWT signature not verified · JWT none algorithm · JWT weak HMAC secret · JSON Web Key Set disclosed · Cleartext submission of password |
 | API3:2023 — Broken Object Property Level Authorization | Active + passive | Password returned in later response · Credit card numbers disclosed · Private key disclosed |
-| API4:2023 — Unrestricted Resource Consumption | Passive | — (API-specific) |
+| API4:2023 — Unrestricted Resource Consumption | Active + passive | — (API-specific; incl. GraphQL query batching) |
 | API5:2023 — Broken Function Level Authorization | Active | Broken access control |
 | API6:2023 — Unrestricted Access to Sensitive Business Flows | Passive | — (API-specific) |
 | API7:2023 — Server-Side Request Forgery | Active | Out-of-band resource load (HTTP) · External service interaction · File path traversal |
 | API8:2023 — Security Misconfiguration | Active + passive | CORS · Content security policy · Strict transport security not enforced · Frameable response · Unencrypted communications · Source code disclosure · HTTP TRACE method is enabled |
-| API9:2023 — Improper Inventory Management | Active + passive | — (API-specific) |
+| API9:2023 — Improper Inventory Management | Active + passive | GraphQL introspection enabled (for the GraphQL field-suggestion check) |
 | API10:2023 — Unsafe Consumption of APIs | Active + passive | — (API-specific) |
 
 Every issue in the overlapping categories links to its native
@@ -86,6 +86,11 @@ equivalent — they are the unique coverage this extension adds.
 - **HTTP Parameter Pollution** — fires on any response change (in either
   direction) when a parameter is duplicated; a marker-induced `200 → 400`
   is treated as a real override primitive, not safe rejection.
+- **GraphQL checks native scanning skips** — flags field-suggestion
+  leakage ("Did you mean …", which lets an attacker recover the schema
+  even with introspection off) and array query batching (a rate-limit
+  bypass / brute-force amplification primitive). Endpoint discovery and
+  introspection stay native and are cross-referenced.
 - **Burp AI integration** (optional) — when `api.ai().isEnabled()` is
   true, two extra features activate automatically:
   - **Passive triage**: false-positive filter on noise-prone passive
@@ -118,14 +123,14 @@ com.security.burp/
 │   ├── AbstractPassiveCheck #   base classes — exception handling, triage
 │   ├── AbstractActiveCheck
 │   ├── passive/             # 6 passive checks
-│   └── active/              # 9 active checks
+│   └── active/              # 10 active checks
 │       └── injection/       #   InjectionCheck helpers (payloads, auth-bypass tester)
 ├── scanner/EndpointRegistry # shared state for the UI tab
 ├── ui/ScannerTab            # Swing tab listing discovered endpoints
 └── util/IssueBuilder        # fluent AuditIssue construction
 ```
 
-15 scan checks total, registered individually with the appropriate
+16 scan checks total, registered individually with the appropriate
 `ScanCheckType` (`PER_INSERTION_POINT`, `PER_HOST`, or `PER_REQUEST`).
 See [CLAUDE.md](CLAUDE.md) for the full breakdown.
 

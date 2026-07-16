@@ -6,7 +6,7 @@ This is a Burp Suite extension implementing OWASP API Security Top 10
 (2023) coverage. It is built on the Montoya API and targets Burp Suite
 Professional and Burp Suite DAST.
 
-> **Coverage note.** `main` is the **full build** (15 checks) — complete
+> **Coverage note.** `main` is the **full build** (16 checks) — complete
 > OWASP API Top 10 (2023) coverage in one extension, and this is what we
 > submit to the BApp Store (renamed **"OWASP API Security Top 10 Scanner"**).
 > Several checks intentionally overlap Burp's native scanner (injection,
@@ -40,9 +40,9 @@ src/main/java/com/security/burp/
 │   │                              #   (BusinessFlow, ExcessiveDataExposure,
 │   │                              #   InventoryManagement, ResourceConsumption,
 │   │                              #   SecurityMisconfig, UnsafeApiConsumption)
-│   └── active/                    # 9 active checks, all extend AbstractActiveCheck
+│   └── active/                    # 10 active checks, all extend AbstractActiveCheck
 │       └── injection/             #   (BrokenObjectAuth, BrokenAuth, DeprecatedVersionProbe,
-│                                  #   FunctionLevelAuth, Injection, MassAssignment,
+│                                  #   FunctionLevelAuth, GraphQl, Injection, MassAssignment,
 │                                  #   MethodFuzzing, ParameterPollution, Ssrf).
 │                                  #   InjectionCheck splits into injection/{AuthBypassTester,
 │                                  #   InjectionPayloads}.
@@ -66,13 +66,13 @@ export PATH="$JAVA_HOME/bin:$PATH"
 mvn clean package -DskipTests
 ```
 
-Output: `target/burp-api-scanner-2.3.2.jar` (~370 KB fat JAR).
+Output: `target/burp-api-scanner-2.4.0.jar` (~370 KB fat JAR).
 
 Load in Burp via **Extensions → Installed → Add → Java**.
 
 ## Conventions
 
-These are the patterns established across all 15 checks. Stick to them
+These are the patterns established across all 16 checks. Stick to them
 when adding new ones — Hannah's review feedback was the catalyst for the
 v2 rewrite, and breaking these breaks the property she cared about
 (reviewable code).
