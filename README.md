@@ -1,5 +1,7 @@
 # OWASP API Security Top 10 Scanner
 
+**📦 Available on the [Burp Suite BApp Store](https://portswigger.net/bappstore/4894a4ba29ec4303990196a6bbc5d67b)** — install directly from **Extensions → BApp Store** in Burp.
+
 A Burp Suite extension providing complete OWASP API Security Top 10
 (2023) coverage in one place, built on the
 [Montoya API](https://portswigger.net/burp/documentation/desktop/extend-burp/extensions).
@@ -25,6 +27,10 @@ registered only under Professional.
 > alongside this extension for the deepest results.
 
 ## Quick start
+
+**Most users:** install from the [BApp Store](https://portswigger.net/bappstore/4894a4ba29ec4303990196a6bbc5d67b) via **Extensions → BApp Store** in Burp — no build required.
+
+**Building from source** (development):
 
 ```bash
 mvn clean package -DskipTests
