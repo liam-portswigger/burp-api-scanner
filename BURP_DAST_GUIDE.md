@@ -16,12 +16,12 @@ The extension is shipped as a single fat JAR. Build with:
 mvn clean package -DskipTests
 ```
 
-Output: `target/burp-api-scanner-2.3.2.jar`.
+Output: `target/burp-api-scanner-2.4.0.jar`.
 
 In DAST:
 
 1. **Settings → Extensions → Add extension**
-2. Upload `burp-api-scanner-2.3.2.jar`
+2. Upload `burp-api-scanner-2.4.0.jar`
 3. Enable the extension
 
 There is no per-DAST configuration — once loaded and enabled, the
@@ -35,7 +35,7 @@ startup banner in (that surface only exists in Professional / Community).
 Verify the extension in DAST like this:
 
 1. Open the scan's **Settings** tab and confirm the extension is listed
-   under **Extensions** (e.g. `burp-api-scanner-2.3.2.jar`). This proves
+   under **Extensions** (e.g. `burp-api-scanner-2.4.0.jar`). This proves
    it loaded and was applied to the scan.
 2. After the scan runs, open the **Issues** tab and confirm findings
    labelled `APIx:2023` are present — this confirms the extension's
@@ -53,7 +53,7 @@ extension's Output tab and reads:
 
 ```
 ====================================
-OWASP API Security Top 10 Scanner v2.3.2
+OWASP API Security Top 10 Scanner v2.4.0
 OWASP API Security Top 10 (2023) coverage
 Edition: Burp Suite Professional
 AI features: enabled       (or "disabled" if Burp AI is off)
@@ -62,7 +62,7 @@ AI features: enabled       (or "disabled" if Burp AI is off)
 
 ## OWASP API Top 10 coverage
 
-Complete OWASP API Security Top 10 (2023) coverage — 15 checks. Several
+Complete OWASP API Security Top 10 (2023) coverage — 16 checks. Several
 checks overlap Burp's native scanner; that overlap is intentional (one
 extension, all ten categories, OWASP-labelled) and each overlapping issue
 links to the native check in its detail. Run the native scanner alongside
@@ -73,12 +73,12 @@ this extension for the deepest results.
 | **API1:2023** — Broken Object Level Authorization | Active | Broken access control |
 | **API2:2023** — Broken Authentication | Active | JWT signature not verified; JWT *none* algorithm; JWT weak HMAC secret; JSON Web Key Set disclosed; Cleartext submission of password |
 | **API3:2023** — Broken Object Property Level Authorization | Active + Passive | Password returned in later response; Credit card numbers disclosed; Private key disclosed |
-| **API4:2023** — Unrestricted Resource Consumption | Passive | — (API-specific) |
+| **API4:2023** — Unrestricted Resource Consumption | Active + Passive | — (API-specific; incl. GraphQL query batching) |
 | **API5:2023** — Broken Function Level Authorization | Active | Broken access control |
 | **API6:2023** — Unrestricted Access to Sensitive Business Flows | Passive | — (API-specific) |
 | **API7:2023** — Server-Side Request Forgery | Active | Out-of-band resource load (HTTP); External service interaction; File path traversal |
 | **API8:2023** — Security Misconfiguration | Active + Passive | CORS; Content security policy; Strict transport security not enforced; Frameable response; Unencrypted communications; Source code disclosure; HTTP TRACE method is enabled |
-| **API9:2023** — Improper Inventory Management | Active + Passive | — (API-specific) |
+| **API9:2023** — Improper Inventory Management | Active + Passive | GraphQL introspection enabled (for the GraphQL field-suggestion check); otherwise API-specific |
 | **API10:2023** — Unsafe Consumption of APIs | Active + Passive | — (API-specific) |
 
 Each overlapping issue carries a **"Related Burp Scanner checks"** line in
@@ -97,12 +97,10 @@ here: if our duplicate marker flips a 200 to a 400, the server is reading
 the last value and discarding the legitimate first one — a genuine
 override primitive. Confirm exploitability manually.
 
-**Parameter Pollution note:** the HPP check fires on *any* status change
-between the baseline and the polluted request, in either direction
-(reported Tentative). A `200 → 400` is **not** treated as safe rejection
-here: if our duplicate marker flips a 200 to a 400, the server is reading
-the last value and discarding the legitimate first one — a genuine
-override primitive. Confirm exploitability manually.
+**GraphQL note:** on GraphQL endpoints the extension adds two checks native
+scanning does not — field-suggestion leakage ("Did you mean …", API9) and
+array query batching (API4). Endpoint discovery and introspection remain
+native; the field-suggestion issue cross-references them.
 
 ## Burp AI features
 

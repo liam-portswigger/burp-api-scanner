@@ -12,6 +12,7 @@ import com.security.burp.checks.active.BrokenAuthCheck;
 import com.security.burp.checks.active.BrokenObjectAuthCheck;
 import com.security.burp.checks.active.DeprecatedVersionProbeCheck;
 import com.security.burp.checks.active.FunctionLevelAuthCheck;
+import com.security.burp.checks.active.GraphQlCheck;
 import com.security.burp.checks.active.InjectionCheck;
 import com.security.burp.checks.active.MassAssignmentCheck;
 import com.security.burp.checks.active.MethodFuzzingCheck;
@@ -115,6 +116,8 @@ public final class BurpExtender implements BurpExtension {
                 new BrokenAuthCheck(api),                         ScanCheckType.PER_HOST);
         api.scanner().registerActiveScanCheck(
                 new DeprecatedVersionProbeCheck(api),             ScanCheckType.PER_HOST);
+        api.scanner().registerActiveScanCheck(
+                new GraphQlCheck(api),                            ScanCheckType.PER_HOST);
 
         // Passive checks. PER_REQUEST runs once per HTTP transaction. AiTriage
         // filters out contextual false positives for each before they surface.
@@ -164,7 +167,7 @@ public final class BurpExtender implements BurpExtension {
 
     private void logBanner(MontoyaApi api, BurpSuiteEdition edition, boolean aiAvailable) {
         api.logging().logToOutput("====================================");
-        api.logging().logToOutput(EXTENSION_NAME + " v2.3.2");
+        api.logging().logToOutput(EXTENSION_NAME + " v2.4.0");
         api.logging().logToOutput("OWASP API Security Top 10 (2023) coverage");
         api.logging().logToOutput("Edition: " + edition.displayName());
         api.logging().logToOutput("AI features: " + (aiAvailable ? "enabled" : "disabled"));

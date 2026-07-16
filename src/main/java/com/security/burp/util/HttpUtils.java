@@ -102,6 +102,24 @@ public final class HttpUtils {
         return "POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method);
     }
 
+    /**
+     * True if the request targets a GraphQL endpoint — either the path
+     * contains {@code graphql}, or it is a JSON request whose body carries a
+     * GraphQL operation (a {@code "query"} field wrapping a selection set).
+     * Used to gate the GraphQL-specific active checks so they only probe real
+     * GraphQL endpoints.
+     */
+    public static boolean isGraphQlRequest(HttpRequest request) {
+        if (request == null) return false;
+        String path = request.pathWithoutQuery();
+        if (path != null && path.toLowerCase(Locale.ROOT).contains("graphql")) return true;
+        if (isJson(request)) {
+            String body = request.bodyToString();
+            return body != null && body.contains("\"query\"") && body.contains("{");
+        }
+        return false;
+    }
+
     private static boolean contentTypeContains(HttpRequest request, String needle) {
         for (HttpHeader header : request.headers()) {
             if ("content-type".equalsIgnoreCase(header.name())) {
